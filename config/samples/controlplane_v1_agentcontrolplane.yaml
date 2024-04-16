@@ -1,0 +1,9 @@
+apiVersion: controlplane.openshift.io/v1
+kind: AgentControlPlane
+metadata:
+  labels:
+    app.kubernetes.io/name: agent-controlplane-provider
+    app.kubernetes.io/managed-by: kustomize
+  name: agentcontrolplane-sample
+spec:
+  # TODO(user): Add fields here

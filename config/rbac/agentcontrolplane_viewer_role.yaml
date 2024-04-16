@@ -1,0 +1,27 @@
+# permissions for end users to view agentcontrolplanes.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/name: clusterrole
+    app.kubernetes.io/instance: agentcontrolplane-viewer-role
+    app.kubernetes.io/component: rbac
+    app.kubernetes.io/created-by: agent-controlplane-provider
+    app.kubernetes.io/part-of: agent-controlplane-provider
+    app.kubernetes.io/managed-by: kustomize
+  name: agentcontrolplane-viewer-role
+rules:
+- apiGroups:
+  - controlplane.openshift.io
+  resources:
+  - agentcontrolplanes
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - controlplane.openshift.io
+  resources:
+  - agentcontrolplanes/status
+  verbs:
+  - get

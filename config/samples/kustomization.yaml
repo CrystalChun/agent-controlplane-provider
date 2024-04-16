@@ -1,0 +1,4 @@
+## Append samples of your project ##
+resources:
+- controlplane_v1_agentcontrolplane.yaml
+#+kubebuilder:scaffold:manifestskustomizesamples
