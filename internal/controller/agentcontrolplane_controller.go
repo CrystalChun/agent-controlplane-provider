@@ -19,15 +19,19 @@ package controller
 import (
 	"context"
 	"strings"
+	"time"
 
 	"github.com/go-logr/logr"
 	controlplanev1 "github.com/openshift-assisted/agent-controlplane-provider/api/v1"
 	aiv1beta1 "github.com/openshift/assisted-service/api/v1beta1"
 	corev1 "k8s.io/api/core/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	capiv1beta1 "sigs.k8s.io/cluster-api/api/v1beta1"
 	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
+	"sigs.k8s.io/cluster-api/controllers/external"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -51,6 +55,7 @@ type AgentControlPlaneReconciler struct {
 //+kubebuilder:rbac:groups=agent-install.openshift.io,resources=infraenvs,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=agent-install.openshift.io,resources=infraenvs/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=cluster.x-k8s.io,resources=clusters;clusters/status,verbs=get;list;watch
+//+kubebuilder:rbac:groups=cluster.x-k8s.io,resources=machines;machines/status,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -65,18 +70,93 @@ func (r *AgentControlPlaneReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		}
 		return ctrl.Result{Requeue: true}, nil
 	}
-	log.WithValues("agent_control_plane", req.Name, "agent_control_plane_namespace", req.Namespace)
+	log = log.WithValues("agent_control_plane", req.Name, "agent_control_plane_namespace", req.Namespace)
+
+	// TODO: Check if owned by Cluster
+	if len(acp.GetOwnerReferences()) == 0 {
+		log.Info("missing OwnerReference from the Cluster controller, waiting for it")
+
+		return ctrl.Result{}, nil
+	}
+	cluster := &capiv1beta1.Cluster{}
+
+	if err := r.Client.Get(ctx, types.NamespacedName{Name: acp.GetOwnerReferences()[0].Name, Namespace: acp.Namespace}, cluster); err != nil {
+		if !k8serrors.IsNotFound(err) {
+			log.Error(err, "failed to retrieve owner Cluster from the API Server")
+
+			return ctrl.Result{}, err
+		}
+
+		return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
+	}
+
+	if cluster == nil {
+		log.Info("cluster Controller has not yet set OwnerRef")
+		return ctrl.Result{Requeue: true}, nil
+	}
+	log = log.WithValues("cluster", cluster.Name)
 
 	// TODO: Check for deletion
-
-	if err := r.reconcileInfraEnv(ctx, log, acp); err != nil {
+	isoURL, err := r.reconcileInfraEnv(ctx, log, acp)
+	if err != nil {
 		return ctrl.Result{}, err
 	}
 
+	if isoURL == "" {
+		return ctrl.Result{Requeue: true}, nil
+	}
+	// TODO: Set ISO download URL on the MachineTemplate
+	infraRef, err := external.CreateFromTemplate(ctx, &external.CreateFromTemplateInput{
+		Client:      r.Client,
+		TemplateRef: &acp.Spec.MachineTemplate.InfrastructureRef,
+		Namespace:   acp.Namespace,
+		Name:        acp.Name,
+		//OwnerRef:    infraCloneOwner,
+		ClusterName: cluster.Name,
+	})
+	if err != nil {
+		log.Error(err, "couldn't create infraref from template")
+	}
+	log.Info(infraRef.String())
+
+	// Construct the basic Machine.
+	machine := &capiv1beta1.Machine{}
+	if err := r.Client.Get(ctx, types.NamespacedName{Name: acp.Name, Namespace: acp.Namespace}, machine); err != nil {
+		if !k8serrors.IsNotFound(err) {
+			return ctrl.Result{}, err
+		}
+	}
+	if machine == nil {
+		machine = &clusterv1.Machine{
+			TypeMeta: metav1.TypeMeta{
+				APIVersion: clusterv1.GroupVersion.String(),
+				Kind:       "Machine",
+			},
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      acp.Name,
+				Namespace: acp.Namespace,
+				// Note: by setting the ownerRef on creation we signal to the Machine controller that this is not a stand-alone Machine.
+				OwnerReferences: []metav1.OwnerReference{
+					*metav1.NewControllerRef(acp, controlplanev1.GroupVersion.WithKind(agentControlPlaneKind)),
+				},
+				Labels:      map[string]string{},
+				Annotations: map[string]string{},
+			},
+			Spec: clusterv1.MachineSpec{
+				ClusterName:       cluster.Name,
+				Version:           &acp.Spec.Version,
+				InfrastructureRef: *infraRef,
+			},
+		}
+		if err := r.Client.Create(ctx, machine); err != nil {
+			log.Error(err, "couldn't create machine", "name", machine.Name)
+			return ctrl.Result{}, err
+		}
+	}
 	return ctrl.Result{}, nil
 }
 
-func (r *AgentControlPlaneReconciler) reconcileInfraEnv(ctx context.Context, log logr.Logger, acp *controlplanev1.AgentControlPlane) error {
+func (r *AgentControlPlaneReconciler) reconcileInfraEnv(ctx context.Context, log logr.Logger, acp *controlplanev1.AgentControlPlane) (string, error) {
 	infraEnv := &aiv1beta1.InfraEnv{}
 	if err := r.Client.Get(ctx, client.ObjectKey{Namespace: acp.Namespace, Name: acp.Name}, infraEnv); err != nil {
 		if k8serrors.IsNotFound(err) {
@@ -93,21 +173,20 @@ func (r *AgentControlPlaneReconciler) reconcileInfraEnv(ctx context.Context, log
 			// Add owner ref to ensure GC
 			if err := controllerutil.SetOwnerReference(acp, infraEnv, r.Scheme); err != nil {
 				log.Error(err, "error setting owner reference on InfraEnv", "infra_env_name", infraEnv.Name)
-				return err
+				return "", err
 			}
-			return r.Create(ctx, infraEnv)
+			return "", r.Create(ctx, infraEnv)
 		}
-		return err
+		return "", err
 	}
 
 	// InfraEnv exists, check status for ISO download URL
 	if infraEnv.Status.ISODownloadURL == "" {
 		log.Info("InfraEnv corresponding to the AgentControlPlane  has no image URL available.", "infra_env_name", infraEnv.Name)
-		return nil
+		return "", nil
 	}
-	// TODO: Set ISO download URL on the MachineTemplate
 
-	return nil
+	return infraEnv.Status.ISODownloadURL, nil
 }
 
 // SetupWithManager sets up the controller with the Manager.

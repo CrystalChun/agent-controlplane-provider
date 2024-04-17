@@ -71,6 +71,7 @@ type AgentControlPlaneMachineTemplate struct {
 
 //+kubebuilder:object:root=true
 //+kubebuilder:subresource:status
+//+kubebuilder:subresource:scale:specpath=.spec.replicas,statuspath=.status.replicas,selectorpath=.status.selector
 
 // AgentControlPlane is the Schema for the agentcontrolplanes API
 type AgentControlPlane struct {
@@ -114,6 +115,11 @@ type AgentControlPlaneStatus struct {
 	// uploaded kubeadm-config configmap.
 	// +optional
 	Initialized bool `json:"initialized"`
+
+	// Selector is the label selector format to avoid introspection by clients.
+	// Should be the same format as query-param syntax
+	// +optional
+	Selector string `json:"selector"`
 
 	// Ready denotes that the KubeadmControlPlane API Server became ready during initial provisioning
 	// to receive requests.

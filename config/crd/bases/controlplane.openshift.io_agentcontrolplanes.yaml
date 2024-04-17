@@ -230,6 +230,11 @@ spec:
                   (their labels match the selector).
                 format: int32
                 type: integer
+              selector:
+                description: |-
+                  Selector is the label selector format to avoid introspection by clients.
+                  Should be the same format as query-param syntax
+                type: string
               unavailableReplicas:
                 description: |-
                   Total number of unavailable machines targeted by this control plane.
@@ -255,4 +260,8 @@ spec:
     served: true
     storage: true
     subresources:
+      scale:
+        labelSelectorPath: .status.selector
+        specReplicasPath: .spec.replicas
+        statusReplicasPath: .status.replicas
       status: {}
