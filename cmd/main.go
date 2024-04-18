@@ -36,6 +36,8 @@ import (
 
 	controlplanev1 "github.com/openshift-assisted/agent-controlplane-provider/api/v1"
 	"github.com/openshift-assisted/agent-controlplane-provider/internal/controller"
+	aiv1beta1 "github.com/openshift/assisted-service/api/v1beta1"
+	capiv1beta1 "sigs.k8s.io/cluster-api/api/v1beta1"
 	//+kubebuilder:scaffold:imports
 )
 
@@ -48,6 +50,8 @@ func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 
 	utilruntime.Must(controlplanev1.AddToScheme(scheme))
+	utilruntime.Must(aiv1beta1.AddToScheme(scheme))
+	utilruntime.Must(capiv1beta1.AddToScheme(scheme))
 	//+kubebuilder:scaffold:scheme
 }
 
